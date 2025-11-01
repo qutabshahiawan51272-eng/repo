@@ -1,0 +1,130 @@
+name: Multi-RDP
+
+on:
+  workflow_dispatch:
+    inputs:
+      instance_count:
+        description: 'Number of RDP instances to create'
+        required: true
+        default: '5'
+
+jobs:
+  secure-rdp:
+    runs-on: windows-latest
+    timeout-minutes: 3600
+    strategy:
+      matrix:
+        instance: [1, 2, 3, 4, 5]
+      fail-fast: false
+      max-parallel: 5
+
+    steps:
+      - name: Configure Core RDP Settings
+        run: |
+          # Enable Remote Desktop and disable Network Level Authentication
+          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' -Name "fDenyTSConnections" -Value 0 -Force
+          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -Name "UserAuthentication" -Value 0 -Force
+          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -Name "SecurityLayer" -Value 0 -Force
+
+          # Remove any existing firewall rule
+          netsh advfirewall firewall delete rule name="RDP-Tailscale" 2>$null
+          
+          # Allow incoming connection on port 3389
+          netsh advfirewall firewall add rule name="RDP-Tailscale" dir=in action=allow protocol=TCP localport=3389
+
+          # Restart the Remote Desktop service
+          Restart-Service -Name TermService -Force
+          Write-Host "RDP configured successfully"
+
+      - name: Create RDP User
+        run: |
+          $username = "RDP"
+          $password = "Khizar@123"
+          
+          $securePass = ConvertTo-SecureString $password -AsPlainText -Force
+          
+          # Remove user if exists
+          if (Get-LocalUser -Name $username -ErrorAction SilentlyContinue) {
+              Remove-LocalUser -Name $username -Force
+              Write-Host "Existing user removed"
+          }
+          
+          # Create new user
+          New-LocalUser -Name $username -Password $securePass -AccountNeverExpires -PasswordNeverExpires
+          Add-LocalGroupMember -Group "Administrators" -Member $username
+          Add-LocalGroupMember -Group "Remote Desktop Users" -Member $username
+          
+          Write-Host "User '$username' created successfully"
+
+      - name: Install Tailscale
+        run: |
+          $tsUrl = "https://pkgs.tailscale.com/stable/tailscale-setup-1.82.0-amd64.msi"
+          $installerPath = "$env:TEMP\tailscale.msi"
+          
+          Write-Host "Downloading Tailscale..."
+          Invoke-WebRequest -Uri $tsUrl -OutFile $installerPath
+          
+          Write-Host "Installing Tailscale..."
+          Start-Process msiexec.exe -ArgumentList "/i", ""$installerPath"", "/quiet", "/norestart" -Wait
+          
+          Remove-Item $installerPath -Force
+          Write-Host "Tailscale installed successfully"
+
+      - name: Connect to Tailscale
+        run: |
+          $hostname = "rdp-instance-${{ matrix.instance }}-run-${{ github.run_number }}"
+          Write-Host "Connecting to Tailscale with hostname: $hostname"
+          
+          & "$env:ProgramFiles\Tailscale\tailscale.exe" up --authkey=${{ secrets.TAILSCALE_AUTH_KEY }} --hostname=$hostname
+          
+          # Wait for IP assignment
+          $tsIP = $null
+          $retries = 0
+          while (-not $tsIP -and $retries -lt 15) {
+              Start-Sleep -Seconds 3
+              $tsIP = & "$env:ProgramFiles\Tailscale\tailscale.exe" ip -4
+              $retries++
+              Write-Host "Attempt $retries : Waiting for Tailscale IP..."
+          }
+          
+          if (-not $tsIP) {
+              Write-Error "Failed to get Tailscale IP"
+              exit 1
+          }
+          
+          Write-Host "Tailscale IP assigned: $tsIP"
+          echo "TAILSCALE_IP=$tsIP" >> $env:GITHUB_ENV
+          echo "HOSTNAME=$hostname" >> $env:GITHUB_ENV
+      
+      - name: Verify RDP Connection
+        run: |
+          Write-Host "Verifying RDP on $env:TAILSCALE_IP..."
+          
+          $testResult = Test-NetConnection -ComputerName $env:TAILSCALE_IP -Port 3389 -WarningAction SilentlyContinue
+          
+          if ($testResult.TcpTestSucceeded) {
+              Write-Host "✓ RDP port is accessible"
+          } else {
+              Write-Warning "RDP port test failed, but continuing..."
+          }
+
+      - name: Keep Instance Running
+        run: |
+          Write-Host ""
+          Write-Host "═══════════════════════════════════════════════"
+          Write-Host "  RDP INSTANCE ${{ matrix.instance }} - READY"
+          Write-Host "═══════════════════════════════════════════════"
+          Write-Host "  Hostname : $env:HOSTNAME"
+          Write-Host "  IP Address : $env:TAILSCALE_IP"
+          Write-Host "  Username : RDP"
+          Write-Host "  Password : Khizar@123"
+          Write-Host "═══════════════════════════════════════════════"
+          Write-Host ""
+          
+          $counter = 0
+          while ($true) {
+              $counter++
+              $timestamp = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
+              Write-Host "[$timestamp] Instance ${{ matrix.instance }} Active (Heartbeat #$counter)"
+              Start-Sleep -Seconds 300
+          }
