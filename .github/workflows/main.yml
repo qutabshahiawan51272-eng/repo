@@ -6,7 +6,7 @@ on:
       instance_count:
         description: 'Number of RDP instances to create'
         required: true
-        default: '5'
+        default: '10'
 
 jobs:
   secure-rdp:
@@ -14,9 +14,9 @@ jobs:
     timeout-minutes: 3600
     strategy:
       matrix:
-        instance: [1, 2, 3, 4, 5]
+        instance: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
       fail-fast: false
-      max-parallel: 5
+      max-parallel: 10
 
     steps:
       - name: Configure Core RDP Settings
