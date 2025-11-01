@@ -65,7 +65,7 @@ jobs:
           Invoke-WebRequest -Uri $tsUrl -OutFile $installerPath
           
           Write-Host "Installing Tailscale..."
-          Start-Process msiexec.exe -ArgumentList "/i", ""$installerPath"", "/quiet", "/norestart" -Wait
+          Start-Process msiexec.exe -ArgumentList "/i `"$installerPath`" /quiet /norestart" -Wait
           
           Remove-Item $installerPath -Force
           Write-Host "Tailscale installed successfully"
